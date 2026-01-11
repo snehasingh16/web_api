@@ -54,9 +54,9 @@ public class AuthController : ControllerBase
 
         var user = new User
         {
-            Username = req.Username,
-            PasswordHash = AuthService.HashPassword(req.Password),
-            Role = "User"
+            username = req.Username,
+            passwordHash = AuthService.HashPassword(req.Password),
+            role = "user"
         };
 
         await _userRepo.AddAsync(user);

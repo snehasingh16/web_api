@@ -15,15 +15,17 @@ public class ProjectsController : ControllerBase
 {
     private readonly JwtSettings _jwt;
     private readonly Post34.Data.AppDbContext _db;
+    private readonly Post34.Repositories.IUserRepository _userRepo;
 
-    public ProjectsController(Post34.Data.AppDbContext db, IOptions<JwtSettings> jwtOptions)
+    public ProjectsController(Post34.Data.AppDbContext db, IOptions<JwtSettings> jwtOptions, Post34.Repositories.IUserRepository userRepo)
     {
         _db = db;
         _jwt = jwtOptions.Value;
+        _userRepo = userRepo;
     }
 
     [HttpGet]
-    public IActionResult GetProjects()
+    public async Task<IActionResult> GetProjects()
     {
         // expect token in custom header `j_token`
         if (!Request.Headers.TryGetValue("j_token", out var tokenVals) || string.IsNullOrWhiteSpace(tokenVals.First()))
@@ -58,7 +60,7 @@ public class ProjectsController : ControllerBase
             if (string.IsNullOrEmpty(username))
                 return Unauthorized(new { status = StatusCodes.Status401Unauthorized, message = "Unable to determine user from token." });
 
-            var user = _db.Users.FirstOrDefault(u => u.Username == username);
+            var user = await _userRepo.GetByUsernameAsync(username);
             if (user == null)
                 return Unauthorized(new { status = StatusCodes.Status401Unauthorized, message = "User not found." });
 

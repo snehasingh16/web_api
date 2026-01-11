@@ -2,6 +2,7 @@ using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using MongoDB.Driver;
 using Post34.Data;
 using Post34.Helpers;
 using Post34.Repositories;
@@ -13,11 +14,16 @@ builder.Services.AddControllers();
 builder.Services.AddOpenApi();
 
 // configure DbContext (InMemory for demo; replace with SqlServer/Postgres in prod)
-builder.Services.AddDbContext<AppDbContext>(opt => opt.UseInMemoryDatabase("Post34Db"));
+builder.Services.AddDbContext<AppDbContext>(opt => opt.UseInMemoryDatabase("Post34"));
 
 // bind JWT settings
 builder.Services.Configure<JwtSettings>(builder.Configuration.GetSection("Jwt"));
 var jwt = builder.Configuration.GetSection("Jwt").Get<JwtSettings>()!;
+
+// bind mongo settings from configuration (use appsettings.json)
+builder.Services.Configure<MongoSettings>(builder.Configuration.GetSection("Mongo"));
+var mongoSettings = builder.Configuration.GetSection("Mongo").Get<MongoSettings>() ?? new MongoSettings();
+
 // bind seed settings
 builder.Services.Configure<SeedSettings>(builder.Configuration.GetSection("SeedData"));
 var seed = builder.Configuration.GetSection("SeedData").Get<SeedSettings>() ?? new SeedSettings();
@@ -43,10 +49,17 @@ builder.Services.AddAuthentication(options =>
     });
 
 // DI
-builder.Services.AddScoped<IUserRepository, UserRepository>();
+builder.Services.AddSingleton(mongoSettings);
+
+// Register Mongo-backed user repository (remove EF InMemory repository)
+builder.Services.AddScoped<IUserRepository, MongoUserRepository>();
+
 builder.Services.AddScoped<IAuthService, AuthService>();
 
 var app = builder.Build();
+
+// Log which user repository implementation was selected
+app.Logger.LogInformation("Startup: using MongoUserRepository (MongoDB)");
 
 // Configure middleware
 if (app.Environment.IsDevelopment())
@@ -60,25 +73,6 @@ app.UseAuthorization();
 
 app.MapControllers();
 
-// keep a simple demo endpoint
-app.MapGet("/weatherforecast", () =>
-{
-    var summaries = new[]
-    {
-        "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-    };
-
-    var forecast =  Enumerable.Range(1, 5).Select(index =>
-        new WeatherForecast
-        (
-            DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-            Random.Shared.Next(-20, 55),
-            summaries[Random.Shared.Next(summaries.Length)]
-        ))
-        .ToArray();
-    return forecast;
-})
-.WithName("GetWeatherForecast");
 
 // seed data (development convenience) from configuration
 using (var scope = app.Services.CreateScope())
@@ -89,12 +83,13 @@ using (var scope = app.Services.CreateScope())
     // ensure a default user exists (keeps previous behaviour)
     if (!db.Users.Any())
     {
-        var user = new Post34.Models.User
-        {
-            Username = "test",
-            PasswordHash = AuthService.HashPassword("P@ssw0rd"),
-            Role = "Admin"
-        };
+            var user = new Post34.Models.User
+            {
+                Id = Guid.NewGuid().ToString(),
+                username = "test",
+                passwordHash = AuthService.HashPassword("P@ssw0rd"),
+                role = "Admin"
+            };
         db.Users.Add(user);
         db.SaveChanges();
     }
@@ -115,26 +110,22 @@ using (var scope = app.Services.CreateScope())
     // seed permissions from configuration
     if (seed.Permissions != null && seed.Permissions.Any())
     {
-        foreach (var perm in seed.Permissions)
-        {
-            var user = db.Users.FirstOrDefault(u => u.Username == perm.Username);
-            var project = db.Projects.FirstOrDefault(p => p.Name == perm.ProjectName);
-            if (user != null && project != null)
-            {
-                if (!db.ProjectPermissions.Any(pp => pp.UserId == user.Id && pp.ProjectId == project.Id))
+                foreach (var perm in seed.Permissions)
                 {
-                    db.ProjectPermissions.Add(new Post34.Models.ProjectPermission { UserId = user.Id, ProjectId = project.Id, CanAccess = perm.CanAccess });
+                    var user = db.Users.FirstOrDefault(u => u.username == perm.Username);
+                    var project = db.Projects.FirstOrDefault(p => p.Name == perm.ProjectName);
+                    if (user != null && project != null)
+                    {
+                        if (!db.ProjectPermissions.Any(pp => pp.UserId == user.Id && pp.ProjectId == project.Id))
+                        {
+                            db.ProjectPermissions.Add(new Post34.Models.ProjectPermission { UserId = user.Id, ProjectId = project.Id, CanAccess = perm.CanAccess });
+                        }
+                    }
                 }
-            }
-        }
         db.SaveChanges();
     }
 }
 
 app.Run();
 
-record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
-{
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
-}
 

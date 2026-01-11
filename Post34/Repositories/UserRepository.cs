@@ -15,7 +15,7 @@ public class UserRepository : IUserRepository
 
     public async Task<User?> GetByUsernameAsync(string username)
     {
-        return await _db.Users.FirstOrDefaultAsync(u => u.Username == username);
+        return await _db.Users.FirstOrDefaultAsync(u => u.username == username);
     }
 
     public async Task AddAsync(User user)

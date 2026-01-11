@@ -27,10 +27,10 @@ public class AuthService : IAuthService
         var user = await _repo.GetByUsernameAsync(request.Username);
         if (user == null) return null;
 
-        if (!VerifyPassword(request.Password, user.PasswordHash)) return null;
+        if (!VerifyPassword(request.Password, user.passwordHash)) return null;
 
-        var token = GenerateToken(user);
-        return new AuthResponse { Token = token.token, ExpiresAt = token.expiresAt };
+        var jwt = GenerateToken(user);
+        return new AuthResponse { Token = jwt.token, ExpiresAt = jwt.expiresAt };
     }
 
     private (string token, DateTime expiresAt) GenerateToken(User user)
@@ -42,12 +42,12 @@ public class AuthService : IAuthService
 
         var claims = new List<Claim>
         {
-            new Claim(JwtRegisteredClaimNames.Sub, user.Username),
-            new Claim(ClaimTypes.Name, user.Username)
+            new Claim(JwtRegisteredClaimNames.Sub, user.username),
+            new Claim(ClaimTypes.Name, user.username)
         };
 
-        if (!string.IsNullOrEmpty(user.Role))
-            claims.Add(new Claim(ClaimTypes.Role, user.Role));
+        if (!string.IsNullOrEmpty(user.role))
+            claims.Add(new Claim(ClaimTypes.Role, user.role));
 
         var token = new JwtSecurityToken(
             issuer: _jwt.Issuer,
