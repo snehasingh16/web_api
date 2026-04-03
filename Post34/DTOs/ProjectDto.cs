@@ -13,4 +13,14 @@ public class ProjectDto
     // using the exact key the user requested
     [JsonPropertyName("permision")]
     public bool Permission { get; set; }
+
+    [JsonPropertyName("used_services_list")]
+    public List<ServiceItem> used_services_list { get; set; } = new();
+}
+
+
+public class ServiceItem
+{
+    public string service_name { get; set; }
+    public int service_id { get; set; }
 }

@@ -7,6 +7,7 @@ using Post34.Data;
 using Post34.Helpers;
 using Post34.Repositories;
 using Post34.Services;
+using Post34.DTOs;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -99,9 +100,9 @@ using (var scope = app.Services.CreateScope())
     {
         foreach (var sp in seed.Projects)
         {
-            if (!db.Projects.Any(p => p.Name == sp.Name))
+            if (!db.Projects.Any(p => p.project_name == sp.Name && p.project_id == sp.project_id))
             {
-                db.Projects.Add(new Post34.Models.Project { Name = sp.Name });
+                db.Projects.Add(new Post34.Models.Project { project_name = sp.Name, project_id = sp.project_id, used_services_list = sp.used_services_list });
             }
         }
         db.SaveChanges();
@@ -113,12 +114,12 @@ using (var scope = app.Services.CreateScope())
                 foreach (var perm in seed.Permissions)
                 {
                     var user = db.Users.FirstOrDefault(u => u.username == perm.Username);
-                    var project = db.Projects.FirstOrDefault(p => p.Name == perm.ProjectName);
+                    var project = db.Projects.FirstOrDefault(p => p.project_name == perm.ProjectName);
                     if (user != null && project != null)
                     {
-                        if (!db.ProjectPermissions.Any(pp => pp.UserId == user.Id && pp.ProjectId == project.Id))
+                        if (!db.ProjectPermissions.Any(pp => pp.UserId == user.Id && pp.ProjectId == project.project_id))
                         {
-                            db.ProjectPermissions.Add(new Post34.Models.ProjectPermission { UserId = user.Id, ProjectId = project.Id, CanAccess = perm.CanAccess });
+                            db.ProjectPermissions.Add(new Post34.Models.ProjectPermission { UserId = user.Id, ProjectId = project.project_id, CanAccess = perm.CanAccess });
                         }
                     }
                 }

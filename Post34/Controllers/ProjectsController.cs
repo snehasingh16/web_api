@@ -74,9 +74,11 @@ public class ProjectsController : ControllerBase
             var projects = projList
                 .Select(p => new ProjectDto
                 {
-                    ProjectId = p.Id,
-                    ProjectName = p.Name,
-                    Permission = perms.TryGetValue(p.Id, out var can) ? can : false
+                    ProjectId = p.project_id,
+                    ProjectName = p.project_name,
+                    used_services_list = p.used_services_list,
+                    Permission = perms.TryGetValue(p.project_id, out var can) ? can : false,
+                    
                 })
                 .ToList();
 
