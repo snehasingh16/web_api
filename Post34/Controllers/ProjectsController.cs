@@ -6,6 +6,8 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.Extensions.Options;
 using Post34.DTOs;
 using Post34.Helpers;
+using MongoDB.Driver;
+using MongoDB.Bson;
 
 namespace Post34.Controllers;
 
@@ -16,24 +18,24 @@ public class ProjectsController : ControllerBase
     private readonly JwtSettings _jwt;
     private readonly Post34.Data.AppDbContext _db;
     private readonly Post34.Repositories.IUserRepository _userRepo;
+    private readonly Post34.Repositories.IProjectRepository _projectRepo;
 
-    public ProjectsController(Post34.Data.AppDbContext db, IOptions<JwtSettings> jwtOptions, Post34.Repositories.IUserRepository userRepo)
+    public ProjectsController(Post34.Data.AppDbContext db, IOptions<JwtSettings> jwtOptions, Post34.Repositories.IUserRepository userRepo, Post34.Repositories.IProjectRepository projectRepo)
     {
         _db = db;
         _jwt = jwtOptions.Value;
         _userRepo = userRepo;
+        _projectRepo = projectRepo;
     }
 
     [HttpGet]
     public async Task<IActionResult> GetProjects()
     {
-        // expect token in custom header `j_token`
-        if (!Request.Headers.TryGetValue("j_token", out var tokenVals) || string.IsNullOrWhiteSpace(tokenVals.First()))
+        var token = GetAuthToken();
+        if (string.IsNullOrWhiteSpace(token))
         {
-            return Unauthorized(new { status = StatusCodes.Status401Unauthorized, message = "Missing j_token header." });
+            return Unauthorized(new { status = StatusCodes.Status401Unauthorized, message = "Missing JWT token. Use j_token header or Authorization: Bearer <token>." });
         }
-
-        var token = tokenVals.First();
 
         try
         {
@@ -64,29 +66,109 @@ public class ProjectsController : ControllerBase
             if (user == null)
                 return Unauthorized(new { status = StatusCodes.Status401Unauthorized, message = "User not found." });
 
-            // load permissions for user
-            var perms = _db.ProjectPermissions
-                .Where(pp => pp.UserId == user.Id)
-                .ToDictionary(pp => pp.ProjectId, pp => pp.CanAccess);
+            // Fetch the single document from MongoDB
+            var mongoSettings = HttpContext.RequestServices.GetRequiredService<Post34.Helpers.MongoSettings>();
+            var client = new MongoClient(mongoSettings.ConnectionString);
+            var db = client.GetDatabase(mongoSettings.Database);
+            var collection = db.GetCollection<BsonDocument>("Projects");
+            var doc = await collection.Find(_ => true).FirstOrDefaultAsync();
 
-            // fetch projects from DB and map to DTO with per-user permission
-            var projList = _db.Projects.ToList();
-            var projects = projList
-                .Select(p => new ProjectDto
+            if (doc != null)
+            {
+                List<object> projects = new List<object>();
+                if (doc.Contains("projects"))
                 {
-                    ProjectId = p.project_id,
-                    ProjectName = p.project_name,
-                    used_services_list = p.used_services_list,
-                    Permission = perms.TryGetValue(p.project_id, out var can) ? can : false,
-                    
-                })
-                .ToList();
+                    projects = doc["projects"].AsBsonArray.Select(p =>
+                    {
+                        var projectDoc = p.AsBsonDocument;
+                        return (object)new
+                        {
+                            project_id = projectDoc.GetValue("project_id", BsonNull.Value).AsInt32,
+                            project_name = projectDoc.GetValue("project_name", BsonNull.Value).AsString,
+                            proj_description = projectDoc.GetValue("proj_description", BsonNull.Value).AsString,
+                            proj_permission = projectDoc.GetValue("proj_permission", BsonNull.Value).ToString()
+                        };
+                    }).ToList();
+                }
 
-            return Ok(new { status = StatusCodes.Status200OK, data = projects });
+                List<object> user_permissions = new List<object>();
+                if (doc.Contains("user_permissions"))
+                {
+                    user_permissions = doc["user_permissions"].AsBsonArray
+                        .Select(up => up.AsBsonDocument)
+                        .GroupBy(up => up.GetValue("user_id", BsonNull.Value).ToString())
+                        .Select(g => (object)new
+                        {
+                            user_id = g.Key,
+                            projects = g
+                                .Where(up => up.Contains("project_id"))
+                                .Select(up => up.GetValue("project_id", BsonNull.Value).AsInt32)
+                                .ToList()
+                        })
+                        .ToList();
+                }
+
+                return Ok(new { projects = projects, user_permissions = user_permissions });
+            }
+            else
+            {
+                return Ok(new { projects = new List<object>(), user_permissions = new List<object>() });
+            }
+        }
+        catch (SecurityTokenException ex)
+        {
+            return Unauthorized(new { status = StatusCodes.Status401Unauthorized, message = "Invalid or expired token.", error = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new { status = StatusCodes.Status400BadRequest, message = "Failed to read project data.", error = ex.Message });
+        }
+    }
+
+    private string? GetAuthToken()
+    {
+        if (Request.Headers.TryGetValue("j_token", out var tokenVals) && !string.IsNullOrWhiteSpace(tokenVals.First()))
+            return NormalizeBearerToken(tokenVals.First());
+
+        if (Request.Headers.TryGetValue("Authorization", out var authVals))
+        {
+            var authHeader = authVals.FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(authHeader))
+                return NormalizeBearerToken(authHeader);
+        }
+
+        if (Request.Query.TryGetValue("token", out var queryToken) && !string.IsNullOrWhiteSpace(queryToken.First()))
+            return NormalizeBearerToken(queryToken.First());
+
+        return null;
+    }
+
+    private static string? NormalizeBearerToken(string? rawToken)
+    {
+        if (string.IsNullOrWhiteSpace(rawToken))
+            return null;
+
+        const string bearerPrefix = "Bearer ";
+        if (rawToken.StartsWith(bearerPrefix, StringComparison.OrdinalIgnoreCase))
+            return rawToken.Substring(bearerPrefix.Length).Trim();
+
+        return rawToken.Trim();
+    }
+
+    private int ConvertObjectIdToInt(string? objectId)
+    {
+        if (string.IsNullOrEmpty(objectId) || objectId.Length < 8)
+            return 0;
+        
+        // Take first 8 hex characters and convert to int
+        var hex = objectId.Substring(0, 8);
+        try
+        {
+            return int.Parse(hex, System.Globalization.NumberStyles.HexNumber);
         }
         catch
         {
-            return Unauthorized(new { status = StatusCodes.Status401Unauthorized, message = "Invalid or expired token." });
+            return 0;
         }
     }
 }

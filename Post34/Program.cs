@@ -3,11 +3,13 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using MongoDB.Driver;
+using MongoDB.Bson;
 using Post34.Data;
 using Post34.Helpers;
 using Post34.Repositories;
 using Post34.Services;
 using Post34.DTOs;
+using Post34.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -25,9 +27,6 @@ var jwt = builder.Configuration.GetSection("Jwt").Get<JwtSettings>()!;
 builder.Services.Configure<MongoSettings>(builder.Configuration.GetSection("Mongo"));
 var mongoSettings = builder.Configuration.GetSection("Mongo").Get<MongoSettings>() ?? new MongoSettings();
 
-// bind seed settings
-builder.Services.Configure<SeedSettings>(builder.Configuration.GetSection("SeedData"));
-var seed = builder.Configuration.GetSection("SeedData").Get<SeedSettings>() ?? new SeedSettings();
 
 // Authentication
 builder.Services.AddAuthentication(options =>
@@ -52,8 +51,14 @@ builder.Services.AddAuthentication(options =>
 // DI
 builder.Services.AddSingleton(mongoSettings);
 
-// Register Mongo-backed user repository (remove EF InMemory repository)
+// Register Mongo-backed user repository
 builder.Services.AddScoped<IUserRepository, MongoUserRepository>();
+
+// Register Mongo-backed project repository
+builder.Services.AddScoped<IProjectRepository, MongoProjectRepository>();
+
+// Register Mongo-backed API definition repository
+builder.Services.AddScoped<IApiDefinitionRepository, MongoApiDefinitionRepository>();
 
 builder.Services.AddScoped<IAuthService, AuthService>();
 
@@ -80,51 +85,44 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     var repo = scope.ServiceProvider.GetRequiredService<IUserRepository>();
+    var mongoConfig = scope.ServiceProvider.GetRequiredService<MongoSettings>();
 
     // ensure a default user exists (keeps previous behaviour)
     if (!db.Users.Any())
     {
-            var user = new Post34.Models.User
-            {
-                Id = Guid.NewGuid().ToString(),
-                username = "test",
-                passwordHash = AuthService.HashPassword("P@ssw0rd"),
-                role = "Admin"
-            };
+        var user = new Post34.Models.User
+        {
+            Id = "1",
+            username = "test",
+            passwordHash = AuthService.HashPassword("P@ssw0rd"),
+            role = "Admin"
+        };
         db.Users.Add(user);
         db.SaveChanges();
     }
 
-    // seed projects from configuration (if any)
-    if (seed.Projects != null && seed.Projects.Any())
+    // seed project permissions
+    if (!db.ProjectPermissions.Any())
     {
-        foreach (var sp in seed.Projects)
-        {
-            if (!db.Projects.Any(p => p.project_name == sp.Name && p.project_id == sp.project_id))
-            {
-                db.Projects.Add(new Post34.Models.Project { project_name = sp.Name, project_id = sp.project_id, used_services_list = sp.used_services_list });
-            }
-        }
+        db.ProjectPermissions.Add(new ProjectPermission { UserId = "1", ProjectId = 1777651609, CanAccess = true });
+        db.ProjectPermissions.Add(new ProjectPermission { UserId = "1", ProjectId = 1777651902, CanAccess = true });
+        db.ProjectPermissions.Add(new ProjectPermission { UserId = "2", ProjectId = 1777651990, CanAccess = true });
         db.SaveChanges();
     }
 
-    // seed permissions from configuration
-    if (seed.Permissions != null && seed.Permissions.Any())
+    // seed users in MongoDB
+    var client = new MongoClient(mongoConfig.ConnectionString);
+    var mongoDb = client.GetDatabase(mongoConfig.Database);
+    mongoDb.DropCollection("Users");
+    var userCollection = mongoDb.GetCollection<BsonDocument>("Users");
+    var userDoc = new BsonDocument
     {
-                foreach (var perm in seed.Permissions)
-                {
-                    var user = db.Users.FirstOrDefault(u => u.username == perm.Username);
-                    var project = db.Projects.FirstOrDefault(p => p.project_name == perm.ProjectName);
-                    if (user != null && project != null)
-                    {
-                        if (!db.ProjectPermissions.Any(pp => pp.UserId == user.Id && pp.ProjectId == project.project_id))
-                        {
-                            db.ProjectPermissions.Add(new Post34.Models.ProjectPermission { UserId = user.Id, ProjectId = project.project_id, CanAccess = perm.CanAccess });
-                        }
-                    }
-                }
-        db.SaveChanges();
-    }
+        { "_id", "1" },
+        { "username", "test" },
+        { "passwordHash", AuthService.HashPassword("P@ssw0rd") },
+        { "role", "Admin" }
+    };
+    userCollection.InsertOne(userDoc);
 }
 
 app.Run();
